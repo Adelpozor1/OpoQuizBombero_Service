@@ -1,28 +1,45 @@
 import express from "express";
 import bcrypt from "bcryptjs";
 import db from "../../db.js";
+import {
+  validarEmail,
+  validarPassword,
+  validarNombre,
+  normalizarEmail,
+  rateLimitRegister,
+} from "./_seguridad.js";
 
 const router = express.Router();
 
-router.post("/UserRegister", async (req, res) => {
+const BCRYPT_COST = Number(process.env.BCRYPT_COST) || 12;
+
+router.post("/UserRegister", rateLimitRegister, async (req, res) => {
   try {
-    const { nombre, email, password } = req.body;
+    const { nombre, email, password } = req.body ?? {};
 
-    if (!nombre || !email || !password) {
-      return res.status(400).json({ msg: "Todos los campos son obligatorios" });
+    if (!validarNombre(nombre) || !validarEmail(email) || !validarPassword(password)) {
+      return res.status(400).json({
+        msg:
+          "Datos invalidos. Nombre y email obligatorios; contraseña de al menos 8 caracteres.",
+      });
     }
 
-    const existing = await db.query("SELECT id FROM usuarios WHERE email = $1", [email]);
-    if (existing.rows.length > 0) {
-      return res.status(409).json({ msg: "El email ya está registrado" });
+    const emailNorm = normalizarEmail(email);
+    const nombreNorm = String(nombre).trim();
+    const hash = await bcrypt.hash(password, BCRYPT_COST);
+
+    try {
+      await db.query("SELECT sp_usuario_registrar($1, $2, $3)", [
+        nombreNorm,
+        emailNorm,
+        hash,
+      ]);
+    } catch (err) {
+      if (err.code === "23505") {
+        return res.status(409).json({ msg: "El email ya está registrado" });
+      }
+      throw err;
     }
-
-    const hash = await bcrypt.hash(password, 10);
-
-    await db.query(
-      "INSERT INTO usuarios (nombre, email, password) VALUES ($1, $2, $3)",
-      [nombre, email, hash]
-    );
 
     res.status(201).json({ msg: "Usuario registrado correctamente" });
   } catch (error) {
